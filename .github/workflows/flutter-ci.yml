@@ -1,0 +1,58 @@
+name: Flutter CI (Linux)
+
+# Reusable workflow: pub get / analyze / test on a Linux runner.
+# Deliberately Linux-only — macOS GitHub Actions runners cost ~10x Linux
+# minutes, and none of these steps need a Mac. Signed iOS builds get a
+# separate macOS-runner workflow, triggered on-demand/tagged release only,
+# not on every push/PR (see README.md).
+
+on:
+  workflow_call:
+    inputs:
+      working-directory:
+        description: >-
+          Directory containing the Flutter package's pubspec.yaml, relative
+          to the repo root (e.g. "harmonic_engine" for HarmonicEngine, "."
+          for repos whose Flutter package lives at the repo root).
+        required: false
+        type: string
+        default: "."
+      flutter-version:
+        description: >-
+          Exact Flutter SDK version to pin (e.g. "3.44.6"). Pick a release
+          whose bundled Dart SDK satisfies the consuming repo's own
+          pubspec.yaml `environment.sdk` constraint — don't reuse another
+          repo's pin without checking.
+        required: true
+        type: string
+      flutter-channel:
+        description: "Flutter channel to install from."
+        required: false
+        type: string
+        default: "stable"
+
+jobs:
+  analyze-and-test:
+    name: pub get / analyze / test
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: ${{ inputs.flutter-channel }}
+          flutter-version: ${{ inputs.flutter-version }}
+
+      - name: flutter pub get
+        run: flutter pub get
+
+      - name: flutter analyze
+        run: flutter analyze
+
+      - name: flutter test
+        run: flutter test
