@@ -64,12 +64,15 @@ on:
         type: string
         default: "Automated build via GitHub Actions."
     secrets:
-      firebase-service-account:
+      firebase_service_account:
         description: >-
           Firebase service account JSON key content (not a file path) for
           an account with the "Firebase App Distribution Admin" role in the
           target Firebase project. Store as a GitHub Actions secret on the
-          consuming repo, never commit it.
+          consuming repo, never commit it. Underscored (not hyphenated)
+          deliberately — GitHub repo secret names can't contain hyphens, and
+          this needs to line up with `secrets: inherit` at the call site
+          matching a real repo secret name (e.g. `FIREBASE_SERVICE_ACCOUNT`).
         required: true
 
 jobs:
@@ -99,7 +102,7 @@ jobs:
         uses: wzieba/Firebase-Distribution-Github-Action@v1
         with:
           appId: ${{ inputs.firebase-app-id }}
-          serviceCredentialsFileContent: ${{ secrets.firebase-service-account }}
+          serviceCredentialsFileContent: ${{ secrets.firebase_service_account }}
           groups: ${{ inputs.testers-groups }}
           testers: ${{ inputs.testers }}
           releaseNotes: ${{ inputs.release-notes }}

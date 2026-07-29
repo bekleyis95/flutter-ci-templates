@@ -95,7 +95,7 @@ Secrets:
 
 | Secret | Required | Notes |
 |---|---|---|
-| `firebase-service-account` | yes | JSON key **content** (not a file path) for a service account with the "Firebase App Distribution Admin" role in the target Firebase project. Set as a GitHub Actions secret on the *consuming* repo (reusable-workflow secrets aren't inherited across repos automatically — the caller must pass them, e.g. via `secrets: inherit`). |
+| `firebase_service_account` | yes | JSON key **content** (not a file path) for a service account with the "Firebase App Distribution Admin" role in the target Firebase project. Underscored, not hyphenated — GitHub repo secret names can't contain hyphens, so this has to line up with a real repo secret name. Set as a GitHub Actions secret on the *consuming* repo (reusable-workflow secrets aren't inherited across repos automatically — the caller must pass them, e.g. via `secrets: inherit`). |
 
 Getting a service account key (one-time, per Firebase project, done by
 whoever owns the Firebase console — this can't be scripted from a CI
