@@ -63,6 +63,21 @@ on:
         required: false
         type: string
         default: "Automated build via GitHub Actions."
+      dart-defines:
+        description: >-
+          Newline-separated KEY=VALUE pairs passed to `flutter build apk
+          --release` as `--dart-define`s (e.g. API keys read at runtime via
+          `String.fromEnvironment`). Values sourced from a secret via the
+          consuming workflow's `with:` block (e.g. "TMDB_API_KEY=${{
+          secrets.TMDB_API_KEY }}") are still masked in logs — GitHub
+          Actions registers any value that ever flows through a `secrets.*`
+          reference for masking, regardless of which input carries it.
+          Empty lines are ignored. Left generic (not per-key inputs) since
+          which dart-defines a given app needs varies per repo (only
+          BaconChallenge-Flutter needs TMDB_API_KEY today).
+        required: false
+        type: string
+        default: ""
     secrets:
       firebase_service_account:
         description: >-
@@ -96,7 +111,15 @@ jobs:
         run: flutter pub get
 
       - name: flutter build apk --release
-        run: flutter build apk --release
+        env:
+          DART_DEFINES: ${{ inputs.dart-defines }}
+        run: |
+          args=()
+          while IFS= read -r line; do
+            [ -z "$line" ] && continue
+            args+=("--dart-define=$line")
+          done <<< "$DART_DEFINES"
+          flutter build apk --release "${args[@]}"
 
       - name: Upload to Firebase App Distribution
         uses: wzieba/Firebase-Distribution-Github-Action@bd494989dd4bec0343f78adee87fe66e48279ad6 # v1.7.1
