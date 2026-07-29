@@ -18,7 +18,11 @@ preference for these passion projects, not a one-off call. So:
 
 - **Linux runners**: everything that doesn't need a Mac —
   `flutter pub get`, `flutter analyze`, `flutter test`, Android builds.
-  This is `flutter-ci.yml` below, called on every push/PR.
+  `flutter-ci.yml` (analyze/test) runs on every push/PR;
+  `flutter-android-distribute.yml` (build + Firebase App Distribution)
+  is on-demand/tag-triggered only — see below, same "don't run heavy
+  jobs on every push" principle even though it's Linux, since it's still
+  extra minutes and an actual distribution to a real device each time.
 - **macOS runners**: reserved for **signed iOS builds only**, triggered
   on-demand or on a tagged release — never on every push/PR. (Not built
   yet — see "iOS signing / TestFlight" below.)
@@ -65,6 +69,66 @@ constraint):
 | `BaconChallenge-Flutter` | `^3.12.2` | `3.44.6` (bundles Dart 3.12.2) |
 | `HarmonicEngine` (`harmonic_engine/`) | `^3.8.1` | `3.32.1` (bundles Dart 3.8.1) |
 | `TrueCompass-Flutter` (`true_compass/`) | `^3.5.2` | not yet resolved to an exact Flutter patch — do this when wiring that repo, don't guess |
+
+### `flutter-android-distribute.yml` — Android build + Firebase App Distribution (`workflow_call`)
+
+Checkout → pin Flutter SDK → `flutter pub get` → `flutter build apk --release`
+→ upload to Firebase App Distribution, on `ubuntu-latest`. No Play Console,
+no store account, no $25 fee, no review process — Firebase App Distribution
+only needs a Firebase project already wired to the Android app (all four
+Flutter repos already have one for Auth/Firestore). Play Store listing is a
+separate, later, out-of-scope decision.
+
+Inputs:
+
+| Input | Required | Default | Notes |
+|---|---|---|---|
+| `flutter-version` | yes | — | Same pin rules as `flutter-ci.yml`. |
+| `working-directory` | no | `.` | Same as `flutter-ci.yml`. |
+| `flutter-channel` | no | `stable` | |
+| `firebase-app-id` | yes | — | The Firebase Android app's `mobilesdk_app_id` (from `google-services.json`). Not a secret — identifies the app, doesn't grant access. |
+| `testers` | no | `""` | Comma-separated tester emails. Use this and/or `testers-groups`. |
+| `testers-groups` | no | `""` | Comma-separated Firebase App Distribution testers group aliases. |
+| `release-notes` | no | `"Automated build via GitHub Actions."` | |
+
+Secrets:
+
+| Secret | Required | Notes |
+|---|---|---|
+| `firebase-service-account` | yes | JSON key **content** (not a file path) for a service account with the "Firebase App Distribution Admin" role in the target Firebase project. Set as a GitHub Actions secret on the *consuming* repo (reusable-workflow secrets aren't inherited across repos automatically — the caller must pass them, e.g. via `secrets: inherit`). |
+
+Getting a service account key (one-time, per Firebase project, done by
+whoever owns the Firebase console — this can't be scripted from a CI
+session):
+
+1. Firebase console → Project settings → Service accounts → "Generate new
+   private key" (or reuse the existing Admin SDK service account if it
+   already has, or is granted, the App Distribution Admin role via
+   Google Cloud IAM).
+2. Add the downloaded JSON's full content as a GitHub Actions secret named
+   `FIREBASE_SERVICE_ACCOUNT` on the consuming repo (Settings → Secrets and
+   variables → Actions → New repository secret).
+
+Example caller, on-demand only (`.github/workflows/distribute-android.yml`
+in the consuming repo):
+
+```yaml
+name: Distribute Android build
+
+on:
+  workflow_dispatch:   # manual "Run workflow" button
+  # push:
+  #   tags: ["v*"]     # optional: also trigger on a tagged release
+
+jobs:
+  distribute:
+    uses: bekleyis95/flutter-ci-templates/.github/workflows/flutter-android-distribute.yml@main
+    with:
+      flutter-version: "3.44.6"
+      firebase-app-id: "1:255573966927:android:921b0bd52f899a3ba8aa3a"
+      testers: "someone@example.com"
+    secrets: inherit
+```
 
 ### iOS signing / TestFlight — scoped, not built
 
