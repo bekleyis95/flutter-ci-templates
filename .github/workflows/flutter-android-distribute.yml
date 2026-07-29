@@ -1,0 +1,109 @@
+name: Flutter Android Build + Firebase App Distribution (Linux)
+
+# Reusable workflow: builds a release APK and uploads it to Firebase App
+# Distribution for device testing. Deliberately Linux-only (a release APK
+# needs no macOS toolchain) and workflow_call-only — no push/PR trigger of
+# its own. Each consuming repo decides when this actually runs
+# (workflow_dispatch and/or a tag push are the expected triggers), same
+# cost-conscious "not every push" default used elsewhere in this repo.
+#
+# No Play Console/store account/review needed — Firebase App Distribution
+# only requires a Firebase project already wired to the app (see
+# firebase.google.com/docs/app-distribution). Play Store listing is a
+# separate, later, out-of-scope decision.
+
+on:
+  workflow_call:
+    inputs:
+      working-directory:
+        description: >-
+          Directory containing the Flutter package's pubspec.yaml, relative
+          to the repo root (e.g. "harmonic_engine" for HarmonicEngine, "."
+          for repos whose Flutter package lives at the repo root).
+        required: false
+        type: string
+        default: "."
+      flutter-version:
+        description: >-
+          Exact Flutter SDK version to pin (e.g. "3.44.6"). Pick a release
+          whose bundled Dart SDK satisfies the consuming repo's own
+          pubspec.yaml `environment.sdk` constraint — don't reuse another
+          repo's pin without checking.
+        required: true
+        type: string
+      flutter-channel:
+        description: "Flutter channel to install from."
+        required: false
+        type: string
+        default: "stable"
+      firebase-app-id:
+        description: >-
+          Firebase Android app ID (the `mobilesdk_app_id` field in that
+          app's google-services.json, e.g.
+          "1:255573966927:android:921b0bd52f899a3ba8aa3a"). Not a secret —
+          it identifies the app, it doesn't grant access.
+        required: true
+        type: string
+      testers:
+        description: >-
+          Comma-separated tester email addresses to distribute to. Use this
+          or `testers-groups` (or both) — Firebase App Distribution accepts
+          either an ad-hoc email list or a pre-created testers group alias.
+        required: false
+        type: string
+        default: ""
+      testers-groups:
+        description: >-
+          Comma-separated Firebase App Distribution testers group aliases.
+        required: false
+        type: string
+        default: ""
+      release-notes:
+        description: "Release notes attached to the distributed build."
+        required: false
+        type: string
+        default: "Automated build via GitHub Actions."
+    secrets:
+      firebase_service_account:
+        description: >-
+          Firebase service account JSON key content (not a file path) for
+          an account with the "Firebase App Distribution Admin" role in the
+          target Firebase project. Store as a GitHub Actions secret on the
+          consuming repo, never commit it. Underscored (not hyphenated)
+          deliberately — GitHub repo secret names can't contain hyphens, and
+          this needs to line up with `secrets: inherit` at the call site
+          matching a real repo secret name (e.g. `FIREBASE_SERVICE_ACCOUNT`).
+        required: true
+
+jobs:
+  build-and-distribute:
+    name: build apk / distribute
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: ${{ inputs.flutter-channel }}
+          flutter-version: ${{ inputs.flutter-version }}
+
+      - name: flutter pub get
+        run: flutter pub get
+
+      - name: flutter build apk --release
+        run: flutter build apk --release
+
+      - name: Upload to Firebase App Distribution
+        uses: wzieba/Firebase-Distribution-Github-Action@bd494989dd4bec0343f78adee87fe66e48279ad6 # v1.7.1
+        with:
+          appId: ${{ inputs.firebase-app-id }}
+          serviceCredentialsFileContent: ${{ secrets.firebase_service_account }}
+          groups: ${{ inputs.testers-groups }}
+          testers: ${{ inputs.testers }}
+          releaseNotes: ${{ inputs.release-notes }}
+          file: ${{ inputs.working-directory }}/build/app/outputs/flutter-apk/app-release.apk
