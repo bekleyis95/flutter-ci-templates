@@ -78,15 +78,16 @@ on:
         description: >-
           Newline-separated KEY=VALUE pairs passed to `flutter build apk
           --release` as `--dart-define`s (e.g. API keys read at runtime via
-          `String.fromEnvironment`). Deliberately a *secret* input, not a
-          plain `with:` input — GitHub Actions rejects `${{ secrets.X }}`
-          expressions inside a reusable-workflow call's `with:` block
-          ("Unrecognized named-value: 'secrets'"), so composing a value
-          like "TMDB_API_KEY=${{ secrets.TMDB_API_KEY }}" is only valid in
-          `secrets:`. Values are masked in logs regardless of which
-          declared secret carries them. Empty lines ignored. Left generic
-          (not per-key) since which dart-defines a given app needs varies
-          per repo (only BaconChallenge-Flutter needs TMDB_API_KEY today).
+          `String.fromEnvironment`). Deliberately a secret input, not a
+          plain with-block input, because GitHub Actions expression syntax
+          referencing another secret is not accepted inside a
+          reusable-workflow call's with block ("Unrecognized named-value:
+          secrets") — composing a value from one of the caller's own
+          secrets is only valid inside a secrets block. Values are masked
+          in logs regardless of which declared secret carries them. Empty
+          lines ignored. Left generic (not per-key) since which
+          dart-defines a given app needs varies per repo (only
+          BaconChallenge-Flutter needs a TMDB key today).
         required: false
 
 jobs:
