@@ -23,9 +23,12 @@ preference for these passion projects, not a one-off call. So:
   is on-demand/tag-triggered only — see below, same "don't run heavy
   jobs on every push" principle even though it's Linux, since it's still
   extra minutes and an actual distribution to a real device each time.
-- **macOS runners**: reserved for **signed iOS builds only**, triggered
-  on-demand or on a tagged release — never on every push/PR. (Not built
-  yet — see "iOS signing / TestFlight" below.)
+- **macOS runners**: reserved for iOS builds, triggered on-demand or on a
+  tagged release — never on every push/PR. Two tiers: `flutter-ios-build.yml`
+  (unsigned build sanity check — does the Xcode/CocoaPods side even
+  compile, no Apple Developer Program/signing/App Store Connect setup
+  needed) exists now; the signed/TestFlight-upload workflow is still not
+  built — see "iOS signing / TestFlight" below.
 
 ## Workflows
 
@@ -128,6 +131,40 @@ jobs:
       firebase-app-id: "1:255573966927:android:921b0bd52f899a3ba8aa3a"
       testers: "someone@example.com"
     secrets: inherit
+```
+
+### `flutter-ios-build.yml` — iOS build sanity check, unsigned (`workflow_call`)
+
+Checkout → pin Flutter SDK → `flutter pub get` → `flutter build ios --release
+--no-codesign`, on `macos-latest`. Deliberately answers one narrow question —
+does the Xcode/CocoaPods side of the repo actually build right now — without
+needing any of the Apple Developer Program membership, code-signing
+certs/profiles, or App Store Connect setup the real signed/TestFlight
+pipeline (below) needs. Produces no distributable artifact; nothing is
+uploaded anywhere.
+
+Inputs:
+
+| Input | Required | Default | Notes |
+|---|---|---|---|
+| `flutter-version` | yes | — | Same pin rules as `flutter-ci.yml`. |
+| `working-directory` | no | `.` | Same as `flutter-ci.yml`. |
+| `flutter-channel` | no | `stable` | |
+
+Example caller, on-demand only (`.github/workflows/build-ios.yml` in the
+consuming repo):
+
+```yaml
+name: iOS build sanity check
+
+on:
+  workflow_dispatch:   # manual "Run workflow" button
+
+jobs:
+  build-ios:
+    uses: bekleyis95/flutter-ci-templates/.github/workflows/flutter-ios-build.yml@main
+    with:
+      flutter-version: "3.44.6"
 ```
 
 ### iOS signing / TestFlight — scoped, not built
