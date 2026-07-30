@@ -1,0 +1,60 @@
+name: Flutter iOS Build Sanity Check (macOS)
+
+# Reusable workflow: builds an UNSIGNED iOS release archive
+# (`flutter build ios --release --no-codesign`) on a real macOS runner.
+# This is deliberately a stepping stone, not the signed/TestFlight
+# pipeline described in the README's "iOS signing / TestFlight" section —
+# it exists to answer one question on demand: does the Xcode/CocoaPods
+# side of this repo actually build right now, independent of any Apple
+# Developer Program / code-signing / App Store Connect setup being ready.
+# workflow_call-only, no push/PR trigger — each consuming repo decides
+# when this runs (workflow_dispatch expected), matching this repo's
+# existing macOS-minutes-are-expensive discipline (see README).
+
+on:
+  workflow_call:
+    inputs:
+      working-directory:
+        description: >-
+          Directory containing the Flutter package's pubspec.yaml, relative
+          to the repo root (e.g. "harmonic_engine" for HarmonicEngine, "."
+          for repos whose Flutter package lives at the repo root).
+        required: false
+        type: string
+        default: "."
+      flutter-version:
+        description: >-
+          Exact Flutter SDK version to pin (e.g. "3.44.6"). Pick a release
+          whose bundled Dart SDK satisfies the consuming repo's own
+          pubspec.yaml `environment.sdk` constraint — don't reuse another
+          repo's pin without checking.
+        required: true
+        type: string
+      flutter-channel:
+        description: "Flutter channel to install from."
+        required: false
+        type: string
+        default: "stable"
+
+jobs:
+  build-ios-unsigned:
+    name: flutter build ios (unsigned)
+    runs-on: macos-latest
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: ${{ inputs.flutter-channel }}
+          flutter-version: ${{ inputs.flutter-version }}
+
+      - name: flutter pub get
+        run: flutter pub get
+
+      - name: flutter build ios --release --no-codesign
+        run: flutter build ios --release --no-codesign
