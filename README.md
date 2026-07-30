@@ -26,9 +26,8 @@ preference for these passion projects, not a one-off call. So:
 - **macOS runners**: reserved for iOS builds, triggered on-demand or on a
   tagged release — never on every push/PR. Two tiers: `flutter-ios-build.yml`
   (unsigned build sanity check — does the Xcode/CocoaPods side even
-  compile, no Apple Developer Program/signing/App Store Connect setup
-  needed) exists now; the signed/TestFlight-upload workflow is still not
-  built — see "iOS signing / TestFlight" below.
+  compile) and `flutter-ios-distribute.yml` (signed build + TestFlight
+  upload) — see below for both.
 
 ## Workflows
 
@@ -167,24 +166,64 @@ jobs:
       flutter-version: "3.44.6"
 ```
 
-### iOS signing / TestFlight — scoped, not built
+### `flutter-ios-distribute.yml` — iOS signed build + TestFlight upload (`workflow_call`)
 
-Deliberately not implemented yet. Needs, on the macOS-runner side:
+Checkout → pin Flutter SDK → `flutter pub get` → `fastlane match appstore
+--readonly` (decrypts an already-generated cert/profile from a private git
+repo, no Apple login) → `flutter build ipa --release` (signed archive) →
+`fastlane pilot upload` (TestFlight), on `macos-latest`. Never needs an
+interactive Apple ID/password/2FA prompt in CI — see the doc comment at the
+top of the workflow file for why.
 
-- Apple Developer Program membership (approved/$99 paid — verify still
-  active before starting this)
-- Code signing: certificate + provisioning profile, most likely via
-  `fastlane match` rather than hand-rolling cert generation in CI
-- App Store Connect API key for TestFlight upload
-- All of the above stored as GitHub Actions **secrets** on the consuming
-  repo, never committed
-- Trigger: on-demand (`workflow_dispatch`) or on a tagged release — not
-  every push/PR, to keep macOS-minute usage low
+Prerequisite, one-time, done by a human on their own Mac (not scriptable):
+generate the cert + provisioning profile via `fastlane match appstore`
+(stored encrypted in a dedicated private git repo), and an App Store
+Connect API key (`.p8` file) from App Store Connect → Users and Access →
+Integrations. The consuming repo's `ios/Runner.xcodeproj` must also have
+its **Release** configuration set to `CODE_SIGN_STYLE = Manual` with
+`DEVELOPMENT_TEAM`/`PROVISIONING_PROFILE_SPECIFIER` matching what `match`
+produced — this workflow builds using whatever the Xcode project says, it
+doesn't override signing style itself.
 
-This involves real Apple credentials and manual/2FA steps that can't be
-fully scripted from here. See the `flutter-ci-templates` board
-(`~/workspace/danny_b_project_management/boards/flutter-ci-templates.md`)
-for the open decisions blocking this.
+Inputs:
+
+| Input | Required | Default | Notes |
+|---|---|---|---|
+| `flutter-version` | yes | — | Same pin rules as `flutter-ci.yml`. |
+| `working-directory` | no | `.` | Same as `flutter-ci.yml`. |
+| `flutter-channel` | no | `stable` | |
+| `app-identifier` | yes | — | iOS bundle ID (e.g. `com.truecompass.trueCompass`). |
+| `team-id` | yes | — | Apple Developer Team ID (e.g. `4YXW55JLH2`). |
+| `match-git-url` | yes | — | SSH URL of the private certs repo. Not a secret itself — access control is the deploy key + match password below. |
+| `provisioning-profile-specifier` | no | `match AppStore <app-identifier>` | Only set if the profile was renamed from match's default. |
+
+Secrets:
+
+| Secret | Required | Notes |
+|---|---|---|
+| `match_git_private_key` | yes | SSH private key — a **dedicated deploy key** (read-only) on the certs repo, not a personal key. |
+| `match_password` | yes | The passphrase set when `fastlane match` first ran. |
+| `app_store_connect_key_id` / `app_store_connect_issuer_id` / `app_store_connect_key_content` | yes | App Store Connect API key — `key_content` is the full `.p8` file contents including BEGIN/END lines. |
+
+Example caller, on-demand only (`.github/workflows/distribute-ios.yml` in
+the consuming repo):
+
+```yaml
+name: Distribute iOS build to TestFlight
+
+on:
+  workflow_dispatch:
+
+jobs:
+  distribute:
+    uses: bekleyis95/flutter-ci-templates/.github/workflows/flutter-ios-distribute.yml@main
+    with:
+      flutter-version: "3.44.6"
+      app-identifier: "com.truecompass.trueCompass"
+      team-id: "4YXW55JLH2"
+      match-git-url: "git@github.com:bekleyis95/truecompass-certificates.git"
+    secrets: inherit
+```
 
 ## Adopting this in a new repo
 

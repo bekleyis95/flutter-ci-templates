@@ -1,0 +1,233 @@
+name: Flutter iOS Signed Build + TestFlight Upload (macOS)
+
+# Reusable workflow: builds a signed release .ipa and uploads it to
+# TestFlight via fastlane. workflow_call-only, no push/PR trigger of its
+# own — each consuming repo decides when this runs (workflow_dispatch
+# and/or a tag push are the expected triggers), same cost-conscious
+# "not every push" default used for the Android distribute workflow
+# (macOS runners cost ~10x Linux minutes).
+#
+# Code signing is manual (a certificate + provisioning profile managed via
+# `fastlane match`, stored encrypted in a separate private git repo — see
+# https://docs.fastlane.tools/actions/match/), not automatic — CI has no
+# way to do the interactive Apple ID login `Automatic` signing needs. This
+# means the consuming repo's Xcode project (`ios/Runner.xcodeproj`) must
+# already have its Release configuration set to
+# `CODE_SIGN_STYLE = Manual` with `DEVELOPMENT_TEAM` and
+# `PROVISIONING_PROFILE_SPECIFIER` matching what `match` produces — the
+# archive step below builds using whatever the Xcode project itself says,
+# this workflow doesn't override it.
+#
+# Authentication end to end deliberately never needs an interactive Apple
+# ID/password/2FA prompt in CI:
+#   - `fastlane match ... --readonly` only decrypts what's already been
+#     generated and stored (via a real `fastlane match` run done locally,
+#     once, by a human) — no Apple API calls, no login.
+#   - The App Store Connect API key (a `.p8` file + key/issuer IDs)
+#     authenticates the actual TestFlight upload instead of a login.
+
+on:
+  workflow_call:
+    inputs:
+      working-directory:
+        description: >-
+          Directory containing the Flutter package's pubspec.yaml, relative
+          to the repo root (e.g. "harmonic_engine" for HarmonicEngine, "."
+          for repos whose Flutter package lives at the repo root).
+        required: false
+        type: string
+        default: "."
+      flutter-version:
+        description: >-
+          Exact Flutter SDK version to pin (e.g. "3.44.6"). Pick a release
+          whose bundled Dart SDK satisfies the consuming repo's own
+          pubspec.yaml `environment.sdk` constraint — don't reuse another
+          repo's pin without checking.
+        required: true
+        type: string
+      flutter-channel:
+        description: "Flutter channel to install from."
+        required: false
+        type: string
+        default: "stable"
+      app-identifier:
+        description: >-
+          The iOS bundle identifier (e.g. "com.truecompass.trueCompass").
+          Must match both the Xcode project's PRODUCT_BUNDLE_IDENTIFIER
+          and the app_identifier the certs were generated for via
+          `fastlane match`.
+        required: true
+        type: string
+      team-id:
+        description: >-
+          Apple Developer Team ID (e.g. "4YXW55JLH2") — visible on
+          developer.apple.com/account under Membership, and in the
+          "Development Team ID" row `fastlane match` prints when it
+          generates a profile.
+        required: true
+        type: string
+      match-git-url:
+        description: >-
+          SSH URL of the private git repo `fastlane match` stores encrypted
+          certificates/profiles in (e.g.
+          "git@github.com:owner/repo-certificates.git"). Not itself a
+          secret — the actual access control is the deploy key
+          (match_git_private_key) and the encryption passphrase
+          (match_password).
+        required: true
+        type: string
+      provisioning-profile-specifier:
+        description: >-
+          Name of the App Store provisioning profile `fastlane match`
+          created. Defaults to match's own naming convention
+          ("match AppStore <app-identifier>") — only override if it was
+          renamed.
+        required: false
+        type: string
+        default: ""
+    secrets:
+      match_git_private_key:
+        description: >-
+          SSH private key (deploy key, read-only) for cloning
+          match-git-url. Generate a dedicated keypair for this — don't
+          reuse a personal one — and add the public half as a read-only
+          Deploy Key on the certificates repo.
+        required: true
+      match_password:
+        description: >-
+          Passphrase used to encrypt/decrypt the certificates repo's
+          contents, set when `fastlane match` was first run. Fastlane
+          reads this from the MATCH_PASSWORD environment variable
+          automatically.
+        required: true
+      app_store_connect_key_id:
+        description: "App Store Connect API key ID (Users and Access → Integrations)."
+        required: true
+      app_store_connect_issuer_id:
+        description: "App Store Connect API issuer ID (same page as the key ID)."
+        required: true
+      app_store_connect_key_content:
+        description: >-
+          Full contents of the App Store Connect API `.p8` private key file,
+          including the BEGIN/END PRIVATE KEY lines.
+        required: true
+
+jobs:
+  build-and-upload:
+    name: flutter build ipa / upload to TestFlight
+    runs-on: macos-latest
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: ${{ inputs.flutter-channel }}
+          flutter-version: ${{ inputs.flutter-version }}
+
+      - name: flutter pub get
+        run: flutter pub get
+
+      # A dedicated deploy key, not a personal one — see match_git_private_key's
+      # description above. webfactory/ssh-agent loads it into an ssh-agent and
+      # scopes it to this job only.
+      - name: Set up SSH access to the certificates repo
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.match_git_private_key }}
+
+      - name: Trust github.com's host key
+        run: |
+          mkdir -p ~/.ssh
+          ssh-keyscan github.com >> ~/.ssh/known_hosts
+
+      # A fresh, temporary keychain rather than the runner's default login
+      # keychain — standard fastlane-on-CI practice
+      # (https://docs.fastlane.tools/best-practices/continuous-integration/),
+      # keeps this run from depending on (or polluting) any other state.
+      # The unlock password only needs to survive this one job.
+      - name: Create a temporary keychain for code signing
+        run: |
+          KEYCHAIN_PASSWORD=$(openssl rand -base64 32)
+          echo "::add-mask::$KEYCHAIN_PASSWORD"
+          echo "KEYCHAIN_PASSWORD=$KEYCHAIN_PASSWORD" >> "$GITHUB_ENV"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" ci-signing.keychain
+          security set-keychain-settings -lut 21600 ci-signing.keychain
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" ci-signing.keychain
+          security list-keychains -d user -s ci-signing.keychain $(security list-keychains -d user | sed 's/"//g')
+
+      - name: Write the App Store Connect API key
+        working-directory: ${{ inputs.working-directory }}/ios
+        env:
+          KEY_CONTENT: ${{ secrets.app_store_connect_key_content }}
+        run: |
+          printf '%s' "$KEY_CONTENT" > AuthKey.p8
+          cat > api_key.json <<EOF
+          {
+            "key_id": "${{ secrets.app_store_connect_key_id }}",
+            "issuer_id": "${{ secrets.app_store_connect_issuer_id }}",
+            "key_filepath": "$(pwd)/AuthKey.p8",
+            "in_house": false
+          }
+          EOF
+
+      - name: fastlane match (readonly — decrypt existing certs, no Apple login)
+        working-directory: ${{ inputs.working-directory }}/ios
+        env:
+          MATCH_PASSWORD: ${{ secrets.match_password }}
+        run: |
+          fastlane match appstore \
+            --readonly true \
+            --app_identifier "${{ inputs.app-identifier }}" \
+            --git_url "${{ inputs.match-git-url }}" \
+            --api_key_path api_key.json \
+            --keychain_name ci-signing.keychain \
+            --keychain_password "$KEYCHAIN_PASSWORD" \
+            --verbose
+
+      - name: flutter build ipa (signed release archive)
+        env:
+          PROFILE_SPECIFIER: >-
+            ${{ inputs.provisioning-profile-specifier != '' &&
+                inputs.provisioning-profile-specifier ||
+                format('match AppStore {0}', inputs.app-identifier) }}
+        run: |
+          cat > ExportOptions.plist <<EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>method</key>
+            <string>app-store</string>
+            <key>teamID</key>
+            <string>${{ inputs.team-id }}</string>
+            <key>signingStyle</key>
+            <string>manual</string>
+            <key>provisioningProfiles</key>
+            <dict>
+              <key>${{ inputs.app-identifier }}</key>
+              <string>$PROFILE_SPECIFIER</string>
+            </dict>
+          </dict>
+          </plist>
+          EOF
+          flutter build ipa --release --export-options-plist=ExportOptions.plist
+
+      - name: Upload to TestFlight
+        working-directory: ${{ inputs.working-directory }}/ios
+        run: |
+          IPA_DIR="$GITHUB_WORKSPACE/${{ inputs.working-directory }}/build/ios/ipa"
+          IPA_PATH=$(find "$IPA_DIR" -name "*.ipa" | head -n 1)
+          if [ -z "$IPA_PATH" ]; then
+            echo "No .ipa found under build/ios/ipa — flutter build ipa must not have produced one." >&2
+            exit 1
+          fi
+          fastlane pilot upload \
+            --api_key_path api_key.json \
+            --ipa "$IPA_PATH" \
+            --app_identifier "${{ inputs.app-identifier }}" \
+            --skip_waiting_for_build_processing true
