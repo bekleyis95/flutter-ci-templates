@@ -160,20 +160,26 @@ jobs:
           security unlock-keychain -p "$KEYCHAIN_PASSWORD" ci-signing.keychain
           security list-keychains -d user -s ci-signing.keychain $(security list-keychains -d user | sed 's/"//g')
 
+      # fastlane's App Store Connect API key JSON (used by both `match` and
+      # `pilot` below) needs the raw .p8 content under a "key" field, not a
+      # "key_filepath" pointing at it — `pilot` in particular parses this
+      # strictly and errors ("missing field(s): key") if given a filepath
+      # instead. Built with jq (preinstalled on GitHub's macOS runners) so
+      # the multi-line PEM content gets JSON-escaped correctly rather than
+      # hand-rolled into a heredoc.
       - name: Write the App Store Connect API key
         working-directory: ${{ inputs.working-directory }}/ios
         env:
           KEY_CONTENT: ${{ secrets.app_store_connect_key_content }}
+          KEY_ID: ${{ secrets.app_store_connect_key_id }}
+          ISSUER_ID: ${{ secrets.app_store_connect_issuer_id }}
         run: |
-          printf '%s' "$KEY_CONTENT" > AuthKey.p8
-          cat > api_key.json <<EOF
-          {
-            "key_id": "${{ secrets.app_store_connect_key_id }}",
-            "issuer_id": "${{ secrets.app_store_connect_issuer_id }}",
-            "key_filepath": "$(pwd)/AuthKey.p8",
-            "in_house": false
-          }
-          EOF
+          jq -n \
+            --arg key_id "$KEY_ID" \
+            --arg issuer_id "$ISSUER_ID" \
+            --arg key "$KEY_CONTENT" \
+            '{key_id: $key_id, issuer_id: $issuer_id, key: $key, in_house: false}' \
+            > api_key.json
 
       - name: fastlane match (readonly — decrypt existing certs, no Apple login)
         working-directory: ${{ inputs.working-directory }}/ios
