@@ -85,6 +85,20 @@ on:
         required: false
         type: string
         default: ""
+      extra-app-identifiers:
+        description: >-
+          Comma-separated additional bundle identifiers that also need a
+          Distribution profile fetched and exported alongside the primary
+          app-identifier — e.g. an embedded watchOS companion app's own
+          bundle id. Each one must already have a real `fastlane match`
+          profile (this workflow only ever runs readonly, same as the
+          primary identifier) and is assumed to follow match's default
+          naming convention ("match AppStore <identifier>"); leave empty
+          (the default) for apps with no such extra target. Purely
+          additive - existing single-identifier callers are unaffected.
+        required: false
+        type: string
+        default: ""
     secrets:
       match_git_private_key:
         description: >-
@@ -185,10 +199,15 @@ jobs:
         working-directory: ${{ inputs.working-directory }}/ios
         env:
           MATCH_PASSWORD: ${{ secrets.match_password }}
+          EXTRA_IDS: ${{ inputs.extra-app-identifiers }}
         run: |
+          ALL_IDS="${{ inputs.app-identifier }}"
+          if [ -n "$EXTRA_IDS" ]; then
+            ALL_IDS="$ALL_IDS,$EXTRA_IDS"
+          fi
           fastlane match appstore \
             --readonly true \
-            --app_identifier "${{ inputs.app-identifier }}" \
+            --app_identifier "$ALL_IDS" \
             --git_url "${{ inputs.match-git-url }}" \
             --api_key_path api_key.json \
             --keychain_name ci-signing.keychain \
@@ -201,26 +220,37 @@ jobs:
             ${{ inputs.provisioning-profile-specifier != '' &&
                 inputs.provisioning-profile-specifier ||
                 format('match AppStore {0}', inputs.app-identifier) }}
+          EXTRA_IDS: ${{ inputs.extra-app-identifiers }}
         run: |
-          cat > ExportOptions.plist <<EOF
-          <?xml version="1.0" encoding="UTF-8"?>
-          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-          <plist version="1.0">
-          <dict>
-            <key>method</key>
-            <string>app-store</string>
-            <key>teamID</key>
-            <string>${{ inputs.team-id }}</string>
-            <key>signingStyle</key>
-            <string>manual</string>
-            <key>provisioningProfiles</key>
-            <dict>
-              <key>${{ inputs.app-identifier }}</key>
-              <string>$PROFILE_SPECIFIER</string>
-            </dict>
-          </dict>
-          </plist>
-          EOF
+          {
+            echo '<?xml version="1.0" encoding="UTF-8"?>'
+            echo '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">'
+            echo '<plist version="1.0">'
+            echo '<dict>'
+            echo '  <key>method</key>'
+            echo '  <string>app-store</string>'
+            echo '  <key>teamID</key>'
+            echo "  <string>${{ inputs.team-id }}</string>"
+            echo '  <key>signingStyle</key>'
+            echo '  <string>manual</string>'
+            echo '  <key>provisioningProfiles</key>'
+            echo '  <dict>'
+            echo "    <key>${{ inputs.app-identifier }}</key>"
+            echo "    <string>$PROFILE_SPECIFIER</string>"
+            # Each extra identifier (e.g. an embedded watchOS companion)
+            # gets its own entry, assumed to follow match's default
+            # naming convention - see extra-app-identifiers' description.
+            if [ -n "$EXTRA_IDS" ]; then
+              IFS=',' read -ra IDS <<< "$EXTRA_IDS"
+              for id in "${IDS[@]}"; do
+                echo "    <key>$id</key>"
+                echo "    <string>match AppStore $id</string>"
+              done
+            fi
+            echo '  </dict>'
+            echo '</dict>'
+            echo '</plist>'
+          } > ExportOptions.plist
           flutter build ipa --release --export-options-plist=ExportOptions.plist
 
       - name: Upload to TestFlight
